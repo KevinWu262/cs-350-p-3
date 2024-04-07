@@ -80,7 +80,29 @@ runcmd(struct cmd *cmd)
     break;
 
   case REDIR:
-    printf(2, "Redirection Not Implemented\n");
+      struct redircmd *rcmd;
+    rcmd = (struct redircmd*)cmd;
+    int fd;
+    if(rcmd->mode == O_RDONLY){
+      fd = open(rcmd->file, rcmd->mode);
+      if(fd < 0){
+        printf(2, "cannot open %s for reading\n", rcmd->file);
+        exit();
+      }
+      close(0); // close stdin
+      dup(fd);
+      close(fd);
+    } else {
+      fd = open(rcmd->file, rcmd->mode | O_CREATE);
+      if(fd < 0){
+        printf(2, "cannot open %s for writing\n", rcmd->file);
+        exit();
+      }
+      close(1); // close stdout
+      dup(fd);
+      close(fd);
+    }
+    runcmd(rcmd->cmd);
     break;
 
   case LIST:
