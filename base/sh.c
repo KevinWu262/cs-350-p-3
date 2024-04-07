@@ -4,38 +4,15 @@
 #include "user.h"
 #include "fcntl.h"
 
-#ifndef NULL
-#define NULL ((void*)0)
-#endif
-
 // Parsed command representation
 #define EXEC  1
 #define REDIR 2
 #define PIPE  3
 #define LIST  4
 #define BACK  5
+
 #define MAXARGS 10
-#define HISTORY_SIZE 10
-
-char* strdup(const char* s) {
-    int len = strlen(s); 
-    char* new_s = malloc(len + 1);
-    if (new_s == NULL) {
-        return NULL;
-    }
-    for (int i = 0; i <= len; i++) {
-        new_s[i] = s[i];
-    }
-    return new_s;
-}
-int strncmp(const char *s1, const char *s2, int n) {
-    while (n-- > 0 && *s1 && *s1 == *s2) {
-        s1++;
-        s2++;
-    }
-    return (n < 0) ? 0 : *(unsigned char *)s1 - *(unsigned char *)s2;
-}
-
+#define HISTORY_SIZE 10  // Number of commands to store
 
 struct cmd {
   int type;
@@ -73,72 +50,49 @@ struct backcmd {
   struct cmd *cmd;
 };
 
-char *history[HISTORY_SIZE];
-int current = 0; // Current position in history
+struct history {
+  char commands[HISTORY_SIZE][100];
+  int current;
+  int count;
+};
 
 int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
 int background_pid = -1;
 
-void add_history(const char *cmd) {
-    if (current >= HISTORY_SIZE) { // If the history is full, free the oldest command
-        free(history[current % HISTORY_SIZE]);
+struct history hist;
+
+// Simple string compare function
+int str_cmp(const char *s1, const char *s2, int n) {
+    for (int i = 0; i < n && s1[i] && s2[i]; i++) {
+        if (s1[i] != s2[i])
+            return s1[i] - s2[i];
     }
-    history[current % HISTORY_SIZE] = strdup(cmd);
-    current++;
+    return 0;
 }
 
-void print_history() {
-    int i, start = current - HISTORY_SIZE < 0 ? 0 : current - HISTORY_SIZE;
-    for (i = start; i < current; i++) {
-        printf(2, "%d: %s\n", i - start + 1, history[i % HISTORY_SIZE]);
+void str_copy_n(char *dest, const char *src, int n) {
+    int i;
+    for (i = 0; i < n && src[i] != '\0'; i++) {
+        dest[i] = src[i];
     }
-}
-
-int getcmd(char *buf, int nbuf) {
-  printf(2, "$ ");
-  memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
-    return -1;
-  
-  // Check for 'hist' or 'hist N' command
-  if (strncmp(buf, "hist", 4) == 0) {
-    if (strcmp(buf, "hist print\n") == 0) {
-      print_history();
-      return -1; // Indicate to main loop no further action is needed
-    } else {
-      // Handle 'hist N' command here, where N is the command number to re-execute
-      int hist_num = 0;
-      if (buf[4] == ' ') {
-        hist_num = atoi(&buf[5]);
-        if (hist_num > 0 && hist_num <= HISTORY_SIZE && hist_num <= current) {
-          char *hist_cmd = history[(current - hist_num) % HISTORY_SIZE];
-          strcpy(buf, hist_cmd);
-          return 0; // Return 0 indicating a command is ready to run
-        }
-      }
-      printf(2, "Invalid history command\n");
-      return -1; // Invalid 'hist N' command
+    for (; i < n; i++) {
+        dest[i] = '\0';  // Ensure the string is null-terminated
     }
-  }
-  add_history(buf); // Normal command; add to history
-  return 0; // Indicate a command is ready to run
 }
 
 
 // Execute cmd.  Never returns.
-void
-runcmd(struct cmd *cmd)
-{
+void runcmd(struct cmd *cmd) {
   int p[2];
   struct backcmd *bcmd;
   struct execcmd *ecmd;
   struct listcmd *lcmd;
   struct pipecmd *pcmd;
-  //struct redircmd *rcmd;
-  
+  struct redircmd *rcmd;
+  int fd;
+
   if(cmd == 0)
     exit();
 
@@ -155,9 +109,7 @@ runcmd(struct cmd *cmd)
     break;
 
   case REDIR:
-      struct redircmd *rcmd;
     rcmd = (struct redircmd*)cmd;
-    int fd;
     if(rcmd->mode == O_RDONLY){
       fd = open(rcmd->file, rcmd->mode);
       if(fd < 0){
@@ -192,7 +144,6 @@ runcmd(struct cmd *cmd)
 
   case PIPE:
     pcmd = (struct pipecmd*)cmd;
-    
     if(pipe(p) < 0){
       printf(2, "pipe failed");
     }
@@ -213,13 +164,11 @@ runcmd(struct cmd *cmd)
 
     close(p[0]);
     close(p[1]);
-    
     wait();
     wait();
     break;
 
   case BACK:
-    // printf(2, "Backgrounding not implemented\n");
     bcmd = (struct backcmd*)cmd;
     int pid = fork1();
     if (pid == 0) {
@@ -233,16 +182,39 @@ runcmd(struct cmd *cmd)
   exit();
 }
 
+void print_history() {
+    int index = hist.current;
+    for (int i = 0; i < hist.count; i++) {
+        index = index == 0 ? HISTORY_SIZE - 1 : index - 1;
+        printf(2, "%d: %s", i + 1, hist.commands[index]);
+    }
+}
 
+void execute_history(int command_number) {
+    if (command_number < 1 || command_number > hist.count) {
+        printf(2, "Invalid history number\n");
+        return;
+    }
+    int index = (hist.current - command_number + HISTORY_SIZE) % HISTORY_SIZE;
+    printf(2, "Executing: %s", hist.commands[index]);
+    runcmd(parsecmd(hist.commands[index]));
+}
 
 int
-main(void)
+getcmd(char *buf, int nbuf)
 {
+  printf(2, "$ ");
+  memset(buf, 0, nbuf);
+  gets(buf, nbuf);
+  if(buf[0] == 0) // EOF
+    return -1;
+  return 0;
+}
+
+int main(void) {
   static char buf[100];
   int fd;
-
-  // Initialize history
-  memset(history, 0, sizeof(history));
+  int status;
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -251,6 +223,8 @@ main(void)
       break;
     }
   }
+
+  memset(&hist, 0, sizeof(hist));  // Initialize history
 
   // Read and run input commands.
   while(getcmd(buf, sizeof(buf)) >= 0){
@@ -261,14 +235,36 @@ main(void)
         printf(2, "cannot cd %s\n", buf+3);
       continue;
     }
+    if(str_cmp(buf, "hist print", 10) == 0) {
+      print_history();
+      continue;
+    } else if(str_cmp(buf, "hist ", 5) == 0) {
+      int hist_num = atoi(&buf[5]);  // Convert history command number to integer
+      execute_history(hist_num);
+      continue;
+    }
+    if(str_cmp(buf, "hist", 4) != 0) {  // Avoid recording "hist" command itself
+      str_copy_n(hist.commands[hist.current], buf, 100);
+      hist.current = (hist.current + 1) % HISTORY_SIZE;
+      if(hist.count < HISTORY_SIZE) hist.count++;
+    }
+
     if(fork1() == 0) {
       runcmd(parsecmd(buf));
     } else {
       wait();
+      if (background_pid > 0) {
+        waitpid(background_pid, &status, 0);
+        background_pid = -1;
+      }
     }
   }
   exit();
 }
+
+
+
+
 void
 panic(char *s)
 {
@@ -589,3 +585,5 @@ nulterminate(struct cmd *cmd)
   }
   return cmd;
 }
+
+
