@@ -578,3 +578,51 @@ chpr(int pid, int priority)
 	release(&ptable.lock);
 	return pid;
 }
+
+int 
+waitpid(int pid, int* status, int options)
+{
+  struct proc *waitpid_proc;
+  int proc_exist;
+  int zombie_pid;
+
+  acquire(&ptable.lock);
+
+  for (;;) {
+    proc_exist = 0;
+
+    for (waitpid_proc = ptable.proc; waitpid_proc < &ptable.proc[NPROC]; waitpid_proc++) {
+      if (waitpid_proc->pid != pid){
+        continue;
+      }
+
+      proc_exist = 1;
+
+      if (waitpid_proc->state == ZOMBIE) {
+        zombie_pid = waitpid_proc->pid;
+        kfree(waitpid_proc->kstack);
+        waitpid_proc->kstack = 0;
+        freevm(waitpid_proc->pgdir);
+        waitpid_proc->state = UNUSED;
+        waitpid_proc->parent = 0;
+        waitpid_proc->pid = 0;
+        waitpid_proc->killed = 0;
+        waitpid_proc->name[0] = 0;
+        release(&ptable.lock);
+
+        if (status != 0) {
+          *status = waitpid_proc->exitstat;
+        }
+
+        return zombie_pid;
+      }
+    }
+
+    if (!proc_exist || waitpid_proc->killed) {
+      release(&ptable.lock);
+      return -1;
+    }
+
+    sleep(waitpid_proc, &ptable.lock);
+  }
+}

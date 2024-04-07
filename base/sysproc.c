@@ -117,4 +117,16 @@ sys_chpr(void)
   return chpr(pid, pr);
 }
 
+int
+sys_waitpid(int pid, int* status, int options)
+{
+  char* c;
+  argptr(1,&c,4);
+  int* s = (int*)c;
+  int p;
+  int o;
+  argint(0,&p);
+  argint(2,&o);
+  return waitpid(p, s, o);
+}
 
