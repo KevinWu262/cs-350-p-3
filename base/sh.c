@@ -4,17 +4,37 @@
 #include "user.h"
 #include "fcntl.h"
 
+#ifndef NULL
+#define NULL ((void*)0)
+#endif
+
 // Parsed command representation
 #define EXEC  1
 #define REDIR 2
 #define PIPE  3
 #define LIST  4
 #define BACK  5
-
 #define MAXARGS 10
-#define MAX_HISTORY 10
-char *command_history[MAX_HISTORY];
-int history_count = 0;
+#define HISTORY_SIZE 10
+
+char* strdup(const char* s) {
+    int len = strlen(s); 
+    char* new_s = malloc(len + 1);
+    if (new_s == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i <= len; i++) {
+        new_s[i] = s[i];
+    }
+    return new_s;
+}
+int strncmp(const char *s1, const char *s2, int n) {
+    while (n-- > 0 && *s1 && *s1 == *s2) {
+        s1++;
+        s2++;
+    }
+    return (n < 0) ? 0 : *(unsigned char *)s1 - *(unsigned char *)s2;
+}
 
 
 struct cmd {
@@ -53,10 +73,60 @@ struct backcmd {
   struct cmd *cmd;
 };
 
+char *history[HISTORY_SIZE];
+int current = 0; // Current position in history
+
 int fork1(void);  // Fork but panics on failure.
 void panic(char*);
 struct cmd *parsecmd(char*);
 int background_pid = -1;
+
+void add_history(const char *cmd) {
+    if (current >= HISTORY_SIZE) { // If the history is full, free the oldest command
+        free(history[current % HISTORY_SIZE]);
+    }
+    history[current % HISTORY_SIZE] = strdup(cmd);
+    current++;
+}
+
+void print_history() {
+    int i, start = current - HISTORY_SIZE < 0 ? 0 : current - HISTORY_SIZE;
+    for (i = start; i < current; i++) {
+        printf(2, "%d: %s\n", i - start + 1, history[i % HISTORY_SIZE]);
+    }
+}
+
+int getcmd(char *buf, int nbuf) {
+  printf(2, "$ ");
+  memset(buf, 0, nbuf);
+  gets(buf, nbuf);
+  if(buf[0] == 0) // EOF
+    return -1;
+  
+  // Check for 'hist' or 'hist N' command
+  if (strncmp(buf, "hist", 4) == 0) {
+    if (strcmp(buf, "hist print\n") == 0) {
+      print_history();
+      return -1; // Indicate to main loop no further action is needed
+    } else {
+      // Handle 'hist N' command here, where N is the command number to re-execute
+      int hist_num = 0;
+      if (buf[4] == ' ') {
+        hist_num = atoi(&buf[5]);
+        if (hist_num > 0 && hist_num <= HISTORY_SIZE && hist_num <= current) {
+          char *hist_cmd = history[(current - hist_num) % HISTORY_SIZE];
+          strcpy(buf, hist_cmd);
+          return 0; // Return 0 indicating a command is ready to run
+        }
+      }
+      printf(2, "Invalid history command\n");
+      return -1; // Invalid 'hist N' command
+    }
+  }
+  add_history(buf); // Normal command; add to history
+  return 0; // Indicate a command is ready to run
+}
+
 
 // Execute cmd.  Never returns.
 void
@@ -163,61 +233,16 @@ runcmd(struct cmd *cmd)
   exit();
 }
 
-int
-getcmd(char *buf, int nbuf)
-{
-  printf(2, "$ ");
-  memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if(buf[0] == 0) // EOF
-    return -1;
-  return 0;
-}
 
-
-
-void add_to_history(char *cmd) {
-    if (strncmp(cmd, "hist", 4) == 0) {
-        return; // Don't save the history command itself
-    }
-    int index = history_count % MAX_HISTORY;
-    if (command_history[index]) {
-        free(command_history[index]);
-    }
-    command_history[index] = strdup(cmd);
-    history_count++;
-}
-
-void print_history() {
-    int start = history_count - MAX_HISTORY < 0 ? 0 : history_count - MAX_HISTORY;
-    for (int i = start; i < history_count; i++) {
-        int index = i % MAX_HISTORY;
-        printf("%d: %s\n", i - start + 1, command_history[index]);
-    }
-}
-
-void execute_history_command(int index) {
-    if (index <= 0 || index > MAX_HISTORY || index > history_count) {
-        printf("Invalid history index\n");
-        return;
-    }
-    int cmd_index = (history_count - index) % MAX_HISTORY;
-    if (command_history[cmd_index]) {
-        struct cmd *hist_cmd;
-        hist_cmd = parsecmd(command_history[cmd_index]);
-        if (fork1() == 0) {  // Use fork1 to create a new process for the command
-            runcmd(hist_cmd);
-        }
-        wait();  // Wait for the command to finish
-    }
-}
 
 int
 main(void)
 {
   static char buf[100];
   int fd;
-  int status;
+
+  // Initialize history
+  memset(history, 0, sizeof(history));
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -227,34 +252,23 @@ main(void)
     }
   }
 
-// Read and run input commands.
-while(getcmd(buf, sizeof(buf)) >= 0){
-  if (strncmp(buf, "hist print", 10) == 0) {
-      print_history();
+  // Read and run input commands.
+  while(getcmd(buf, sizeof(buf)) >= 0){
+    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
+      // Chdir must be called by the parent, not the child.
+      buf[strlen(buf)-1] = 0;  // chop \n
+      if(chdir(buf+3) < 0)
+        printf(2, "cannot cd %s\n", buf+3);
       continue;
-  } else if (strncmp(buf, "hist ", 5) == 0) {
-      int num = atoi(buf + 5);
-      execute_history_command(num);
-      continue;
+    }
+    if(fork1() == 0) {
+      runcmd(parsecmd(buf));
+    } else {
+      wait();
+    }
   }
-
-  add_to_history(buf);
-
-  if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
-    // Chdir must be called by the parent, not the child.
-    buf[strlen(buf)-1] = 0;  // chop \n
-    if(chdir(buf+3) < 0)
-      printf(2, "cannot cd %s\n", buf+3);
-    continue;
-  }
-  if(fork1() == 0)
-    runcmd(parsecmd(buf));
-  wait();
-}
-
   exit();
 }
-
 void
 panic(char *s)
 {
