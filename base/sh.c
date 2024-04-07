@@ -12,6 +12,10 @@
 #define BACK  5
 
 #define MAXARGS 10
+#define MAX_HISTORY 10
+char *command_history[MAX_HISTORY];
+int history_count = 0;
+
 
 struct cmd {
   int type;
@@ -170,6 +174,44 @@ getcmd(char *buf, int nbuf)
   return 0;
 }
 
+
+
+void add_to_history(char *cmd) {
+    if (strncmp(cmd, "hist", 4) == 0) {
+        return; // Don't save the history command itself
+    }
+    int index = history_count % MAX_HISTORY;
+    if (command_history[index]) {
+        free(command_history[index]);
+    }
+    command_history[index] = strdup(cmd);
+    history_count++;
+}
+
+void print_history() {
+    int start = history_count - MAX_HISTORY < 0 ? 0 : history_count - MAX_HISTORY;
+    for (int i = start; i < history_count; i++) {
+        int index = i % MAX_HISTORY;
+        printf("%d: %s\n", i - start + 1, command_history[index]);
+    }
+}
+
+void execute_history_command(int index) {
+    if (index <= 0 || index > MAX_HISTORY || index > history_count) {
+        printf("Invalid history index\n");
+        return;
+    }
+    int cmd_index = (history_count - index) % MAX_HISTORY;
+    if (command_history[cmd_index]) {
+        struct cmd *hist_cmd;
+        hist_cmd = parsecmd(command_history[cmd_index]);
+        if (fork1() == 0) {  // Use fork1 to create a new process for the command
+            runcmd(hist_cmd);
+        }
+        wait();  // Wait for the command to finish
+    }
+}
+
 int
 main(void)
 {
@@ -185,27 +227,31 @@ main(void)
     }
   }
 
-  // Read and run input commands.
-  while(getcmd(buf, sizeof(buf)) >= 0){
-    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
-      // Chdir must be called by the parent, not the child.
-      buf[strlen(buf)-1] = 0;  // chop \n
-      if(chdir(buf+3) < 0)
-        printf(2, "cannot cd %s\n", buf+3);
+// Read and run input commands.
+while(getcmd(buf, sizeof(buf)) >= 0){
+  if (strncmp(buf, "hist print", 10) == 0) {
+      print_history();
       continue;
-    }
-    if(fork1() == 0) {
-      runcmd(parsecmd(buf));
-    }
-    else {
-      wait();
-      if (background_pid > 0) {
-        waitpid(background_pid, &status, 0);
-        background_pid = -1;
-      }
-    }
-    // wait();
+  } else if (strncmp(buf, "hist ", 5) == 0) {
+      int num = atoi(buf + 5);
+      execute_history_command(num);
+      continue;
   }
+
+  add_to_history(buf);
+
+  if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
+    // Chdir must be called by the parent, not the child.
+    buf[strlen(buf)-1] = 0;  // chop \n
+    if(chdir(buf+3) < 0)
+      printf(2, "cannot cd %s\n", buf+3);
+    continue;
+  }
+  if(fork1() == 0)
+    runcmd(parsecmd(buf));
+  wait();
+}
+
   exit();
 }
 
