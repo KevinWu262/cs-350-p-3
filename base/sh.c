@@ -202,9 +202,16 @@ void execute_history(int command_number) {
     }
     int index = (hist.current - command_number + HISTORY_SIZE) % HISTORY_SIZE;
     printf(2, "Executing: %s", hist.commands[index]);
-    runcmd(parsecmd(hist.commands[index]));
-}
 
+    // Fork a new process to execute the command from history
+    int pid = fork1();
+    if (pid == 0) { // Child process
+        struct cmd *cmd = parsecmd(hist.commands[index]);
+        runcmd(cmd); // Execute the command in the child process
+    } else { // Parent process
+        wait(); // Wait for the child process to complete
+    }
+}
 int
 getcmd(char *buf, int nbuf)
 {
