@@ -183,12 +183,17 @@ void runcmd(struct cmd *cmd) {
 }
 
 void print_history() {
-    int index = hist.current;
-    for (int i = 0; i < hist.count; i++) {
-        index = index == 0 ? HISTORY_SIZE - 1 : index - 1;
-        printf(2, "%d: %s", i + 1, hist.commands[index]);
+    int index = hist.current - 1;  // Start from the last entered command
+    int num_to_print = hist.count < HISTORY_SIZE ? hist.count : HISTORY_SIZE;
+    
+    for (int i = 0; i < num_to_print; i++) {
+        index = index < 0 ? HISTORY_SIZE - 1 : index; // Wrap around if needed
+        printf(2, "Previous command %d: %s", i + 1, hist.commands[index]);
+        index--;
     }
 }
+
+
 
 void execute_history(int command_number) {
     if (command_number < 1 || command_number > hist.count) {
